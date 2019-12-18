@@ -1,0 +1,7 @@
+dbConfig:
+  url: "jdbc:postgresql://localhost:5432/postgres"
+  username: "admin"
+  password: ""
+  poolSize: 3
+integration:
+  uri: "https://reqres.in"
