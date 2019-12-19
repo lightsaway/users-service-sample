@@ -8,8 +8,14 @@ import org.http4s.circe.jsonOf
 import org.http4s.client.Client
 import org.http4s.client.dsl.Http4sClientDsl
 import org.http4s.dsl.io._
-import vidIq.reqres.domain.types.{FirstName, Id, LastName}
-import vidIq.reqres.domain.{ExternalSystemError, NoExternalUserError, UserNotFoundError}
+import vidIq.reqres.domain.types.{FirstName, Id, LastName, Result}
+import vidIq.reqres.domain.{
+  ApplicationError,
+  EffectSyntax,
+  ExternalSystemError,
+  NoExternalUserError,
+  UserNotFoundError
+}
 
 case class UserData(firstName: FirstName, lastName: LastName)
 
@@ -26,19 +32,22 @@ object UserData {
 }
 
 trait ReqResService[F[_]] {
-  def fetchUserData(id: Id): F[UserData]
+  def fetchUserData(id: Id): Result[F, UserData]
 }
 
 class ReqResServiceImpl[F[_]: Sync](endpoint: Uri, client: Client[F])
     extends ReqResService[F]
-    with Http4sClientDsl[F] {
+    with Http4sClientDsl[F]
+    with EffectSyntax[F, ApplicationError] {
 
-  override def fetchUserData(id: Id): F[UserData] = {
+  override def fetchUserData(id: Id): Result[F, UserData] = {
     client
-      .expect[UserData](GET(endpoint.withPath(s"/api/users/${id.value}")))
-      .adaptError {
+      .fetchAs[UserData](GET(endpoint.withPath(s"/api/users/${id.value}")))
+      .attempt
+      .leftMap {
         case _: DecodeFailure => NoExternalUserError(id)
         case _                => ExternalSystemError("ReqRes.com")
       }
+      .toEitherT
   }
 }

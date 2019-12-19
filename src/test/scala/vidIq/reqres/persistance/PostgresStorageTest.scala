@@ -1,45 +1,49 @@
 package vidIq.reqres.persistance
 
-import org.scalatest.{FunSuite, Matchers}
+import org.scalatest.{EitherValues, FunSuite, Matchers}
 import vidIq.reqres.domain.{User, UserAlreadyRegistered, UserNotFoundError}
 import cats.implicits._
 import vidIq.reqres.DataGen
 import vidIq.reqres.DataGen.randomUser
 
-class PostgresStorageTest extends FunSuite with PostgresBaseTest with Matchers {
+class PostgresStorageTest extends FunSuite with PostgresBaseTest with Matchers with EitherValues {
 
   test("save user") {
     val u   = randomUser
-    val res = tx.use(p => p.save(u)).unsafeRunSync()
-    res shouldBe ((): Unit)
+    val res = tx.use(p => p.save(u).value).unsafeRunSync()
+    res.right.value shouldBe ((): Unit)
   }
 
   test("save existing user") {
     val u = randomUser
-    assertThrows[UserAlreadyRegistered] { tx.use(p => p.save(u) *> p.save(u)).unsafeRunSync() }
+
+    tx.use(p => (p.save(u) *> p.save(u)).value)
+      .unsafeRunSync()
+      .left
+      .value shouldBe a[UserAlreadyRegistered]
 
   }
 
   test("delete not existing user") {
     val u = DataGen.randomUser
-    assertThrows[UserNotFoundError] { tx.use(_.delete(u.email)).unsafeRunSync() }
+    tx.use(_.delete(u.email).value).unsafeRunSync().left.value shouldBe a[UserNotFoundError]
   }
 
   test("delete created user") {
     val u   = DataGen.randomUser
-    val res = tx.use(p => p.save(u) *> p.delete(u.email)).unsafeRunSync()
-    res shouldBe ((): Unit)
+    val res = tx.use(p => (p.save(u) *> p.delete(u.email)).value).unsafeRunSync()
+    res.right.value shouldBe ((): Unit)
   }
 
   test("get with unknown email") {
     val u = DataGen.randomUser
-    assertThrows[UserNotFoundError] { tx.use(_.get(u.email)).unsafeRunSync() }
+    tx.use(_.get(u.email).value).unsafeRunSync().left.value shouldBe a[UserNotFoundError]
   }
 
   test("get known user") {
     val u   = randomUser
-    val res = tx.use(p => p.save(u) *> p.get(u.email)).unsafeRunSync()
-    res shouldBe u
+    val res = tx.use(p => (p.save(u) *> p.get(u.email)).value).unsafeRunSync()
+    res.right.value shouldBe u
   }
 
 }

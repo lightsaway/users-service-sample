@@ -4,6 +4,7 @@ import vidIq.reqres.domain.types.{Email, Id}
 
 sealed abstract class ApplicationError(val msg: String) extends RuntimeException
 
+case class InvalidRequestError(m: String) extends ApplicationError(s"Invalid input into system")
 case class NoExternalUserError(id: Id)
     extends ApplicationError(s"No user found in subsystem with external id  ${id}")
 case class UserNotFoundError(email: Email)

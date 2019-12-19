@@ -1,31 +1,30 @@
 package vidIq.reqres.persistance
 
 import cats.effect.{Async, Blocker, ContextShift, Resource, Sync}
-import cats.effect.concurrent.Ref
 import cats.implicits._
 import doobie.util.transactor.Transactor
-import vidIq.reqres.domain.{DatabaseError, User, UserAlreadyRegistered, UserNotFoundError}
+import vidIq.reqres.domain.{
+  ApplicationError,
+  DatabaseError,
+  EffectSyntax,
+  User,
+  UserAlreadyRegistered,
+  UserNotFoundError
+}
 import doobie.implicits._
 import doobie._
 import doobie.hikari.HikariTransactor
 import doobie.postgres.sqlstate
 import doobie.util.ExecutionContexts
 import org.flywaydb.core.Flyway
-import vidIq.reqres.domain.types.Email
-
+import vidIq.reqres.domain.types.{Email, Result}
 sealed trait Storage[F[_]] {
-  def get(email: Email): F[User]
-  def save(user: User): F[Unit]
-  def delete(email: Email): F[Unit]
+  def get(email: Email): Result[F, User]
+  def save(user: User): Result[F, Unit]
+  def delete(email: Email): Result[F, Unit]
 }
 
 object Storage {
-  def inMemory[F[_]: Sync](
-      state: Map[Email, User] = Map.empty[Email, User]
-  ): F[Storage[F]] =
-    Ref
-      .of[F, Map[Email, User]](state)
-      .map(new InMemoryStorage[F](_))
   def postgress[F[_]: Sync](tx: Transactor[F]) = new PostgresStorage[F](tx)
 
   def transactor[F[_]: Async: ContextShift](config: DbConfig): Resource[F, HikariTransactor[F]] =
@@ -51,50 +50,36 @@ object Storage {
   }
 }
 
-class InMemoryStorage[F[_]](R: Ref[F, Map[Email, User]])(implicit F: Sync[F]) extends Storage[F] {
-  override def get(email: Email) = R.get.map(_.get(email)).flatMap {
-    case None    => F.raiseError[User](UserNotFoundError(email))
-    case Some(u) => F.delay(u)
-  }
+class PostgresStorage[F[_]: Sync](tx: Transactor[F])
+    extends Storage[F]
+    with EffectSyntax[F, ApplicationError] {
 
-  override def delete(email: Email) = R.get.map(_.get(email)).flatMap {
-    case None    => F.raiseError(UserNotFoundError(email))
-    case Some(_) => R.update(m => m - email)
-  }
-
-  override def save(user: User): F[Unit] = R.get.map(_.get(user.email)).flatMap {
-    case Some(_) => F.raiseError(UserAlreadyRegistered(user.email))
-    case None    => R.update(m => m + (user.email -> user))
-  }
-
-}
-
-class PostgresStorage[F[_]: Sync](tx: Transactor[F]) extends Storage[F] {
-
-  override def get(email: Email) =
+  override def get(email: Email): Result[F, User] =
     sql"select * from users where email=${email.value}"
       .query[User]
-      .option
-      .flatMap {
-        case Some(item) => FC.pure(item)
-        case None       => FC.raiseError[User](UserNotFoundError(email))
-      }
+      .unique
+      .attempt
       .transact(tx)
+      .leftMap(_ => UserNotFoundError(email))
+      .toEitherT
 
-  override def delete(email: Email) =
-    sql"delete  from users where email=${email}".update.run
-      .flatMap {
-        case 1 => FC.unit
-        case _ => FC.raiseError[Unit](UserNotFoundError(email))
+  override def delete(email: Email):  Result[F, Unit] =
+    sql"delete  from users where email=${email}".update.run.attempt
+      .map {
+        case Right(1) => ().asRight[ApplicationError]
+        case _        => Left(UserNotFoundError(email))
       }
       .transact(tx)
+      .toEitherT
 
-  override def save(user: User) =
-    sql"""insert into users (id, email, first_name, last_name) values (${user.id}, ${user.email},${user.firstName},${user.lastName})""".update.run
-      .exceptSomeSqlState {
-        case sqlstate.class23.UNIQUE_VIOLATION => FC.raiseError(UserAlreadyRegistered(user.email))
-        case _                                 => FC.raiseError(DatabaseError("Unexpected error appeared"))
+  override def save(user: User):  Result[F, Unit] =
+    sql"""insert into users (id, email, first_name, last_name) values (${user.id}, ${user.email},${user.firstName},${user.lastName})""".update.run.attemptSqlState
+      .map {
+        case Left(sqlstate.class23.UNIQUE_VIOLATION) =>
+          UserAlreadyRegistered(user.email).asLeft[Unit]
+        case Left(_)  => DatabaseError("Unexpected error appeared").asLeft[Unit]
+        case Right(_) => ().asRight[ApplicationError]
       }
       .transact(tx)
-      .void
+      .toEitherT
 }

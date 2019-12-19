@@ -5,14 +5,12 @@ import java.io.{File, FileInputStream, InputStreamReader}
 import cats.effect.{ExitCode, IO, IOApp}
 import io.circe.yaml.parser
 import vidIq.reqres.domain.ApplicationError
-import vidIq.reqres.routing.{HttpErrorHandler, UserHttpErrorHandler}
+import vidIq.reqres.routing.{HttpErrorHandler}
 import cats.implicits._
-import com.olegpy.meow.hierarchy._
 
 object Main extends IOApp {
   def run(args: List[String]) = {
-    implicit val userHttpErrorHandler: HttpErrorHandler[IO, ApplicationError] =
-      new UserHttpErrorHandler[IO]
+
     Server
       .stream[IO](
         parseConfig(

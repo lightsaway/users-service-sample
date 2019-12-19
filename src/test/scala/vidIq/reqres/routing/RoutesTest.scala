@@ -1,30 +1,21 @@
 package vidIq.reqres.routing
 
+import cats.data.EitherT
 import cats.effect.IO
 import cats.implicits._
-import com.olegpy.meow.hierarchy._
+import io.circe.generic.semiauto.deriveEncoder
+import io.circe.literal._
 import io.circe.{Encoder, Json}
 import org.http4s.circe._
 import org.http4s.{EntityEncoder, Method, Request, Uri}
 import org.mockito.{ArgumentMatchersSugar, IdiomaticMockito}
 import org.scalatest.{FunSuite, Matchers}
 import vidIq.reqres.DataGen
-import vidIq.reqres.domain.{
-  ApplicationError,
-  ExternalSystemError,
-  User,
-  UserAlreadyRegistered,
-  UserNotFoundError
-}
-import vidIq.reqres.services.{UserCreateParams, UserService}
-import io.circe.literal._
-import io.circe.generic.semiauto.deriveEncoder
 import vidIq.reqres.domain.types.{Email, Id}
+import vidIq.reqres.domain.{ExternalSystemError, UserAlreadyRegistered, UserNotFoundError}
+import vidIq.reqres.services.{UserCreateParams, UserService}
 
 class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with ArgumentMatchersSugar {
-
-  implicit val userHttpErrorHandler: HttpErrorHandler[IO, ApplicationError] =
-    new UserHttpErrorHandler[IO]
 
   implicit val encoder: Encoder[UserCreateRequest] = deriveEncoder
   implicit val entityEncoder: EntityEncoder[IO, UserCreateRequest] =
@@ -33,10 +24,10 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
   test("get user") {
     val service = mock[UserService[IO]]
     val user    = DataGen.staticUser
-    service.get(any[Email]) returns user.pure[IO]
+    service.get(any[Email]) returns EitherT.fromEither[IO](Right(user))
     val req = Request[IO](uri = Uri(path = s"/users/${user.email}"))
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 200
 
     val expected = json"""{
@@ -53,10 +44,10 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
   test("get not existing user") {
     val user    = DataGen.staticUser
     val service = mock[UserService[IO]]
-    service.get(any[Email]) returns IO.raiseError(UserNotFoundError(user.email))
+    service.get(any[Email]) returns EitherT.fromEither[IO](UserNotFoundError(user.email).asLeft)
 
     val req = Request[IO](uri = Uri(path = s"/users/${user.email.value}"))
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
 
     res.status.code shouldBe 404
     val expected = json"""{
@@ -69,11 +60,11 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
   test("create  user") {
     val service = mock[UserService[IO]]
     val user    = DataGen.staticUser
-    service.create(any[UserCreateParams]) returns user.pure[IO]
+    service.create(any[UserCreateParams]) returns EitherT.fromEither[IO](Right(user))
     val req = Request[IO](method = Method.POST, uri = Uri(path = s"/users"))
       .withEntity(UserCreateRequest(user.id, user.email))
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 200
 
     val expected = json"""{
@@ -89,11 +80,13 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
   test("create duplicate user") {
     val service = mock[UserService[IO]]
     val user    = DataGen.staticUser
-    service.create(any[UserCreateParams]) returns IO.raiseError(UserAlreadyRegistered(user.email))
+    service.create(any[UserCreateParams]) returns EitherT.fromEither[IO](
+      UserAlreadyRegistered(user.email).asLeft
+    )
     val req = Request[IO](method = Method.POST, uri = Uri(path = s"/users"))
       .withEntity(UserCreateRequest(Id(1), Email("some@email.com")))
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 409
 
     val expected = json"""{
@@ -109,9 +102,9 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
     val req  = Request[IO](method = Method.DELETE, uri = Uri(path = s"/users/${user.email}"))
 
     val service = mock[UserService[IO]]
-    service.delete(any[Email]) returns IO.raiseError[Unit](UserNotFoundError(user.email))
+    service.delete(any[Email]) returns EitherT.fromEither[IO](UserNotFoundError(user.email).asLeft)
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 404
     val expected = json"""{
               "message" : "No user found with email first@gmail.com"
@@ -124,9 +117,9 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
     val req  = Request[IO](method = Method.DELETE, uri = Uri(path = s"/users/${user.email}"))
 
     val service = mock[UserService[IO]]
-    service.delete(any[Email]) returns IO.unit
+    service.delete(any[Email]) returns EitherT.fromEither[IO](().asRight)
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 204
   }
 
@@ -135,9 +128,9 @@ class RoutesTest extends FunSuite with Matchers with IdiomaticMockito with Argum
     val req  = Request[IO](method = Method.DELETE, uri = Uri(path = s"/users/${user.email}"))
 
     val service = mock[UserService[IO]]
-    service.delete(any[Email]) returns IO.raiseError[Unit](ExternalSystemError("foo"))
+    service.delete(any[Email]) returns EitherT.fromEither[IO](ExternalSystemError("foo").asLeft)
 
-    val res = Routes.userRoutes[IO](service).run(req).orElse(fail()).value.unsafeRunSync().get
+    val res = new Routes[IO].userRoutes(service).run(req).orElse(fail()).value.unsafeRunSync().get
     res.status.code shouldBe 500
     val expected = json"""{
           "message" : "Having problems with integrated services"

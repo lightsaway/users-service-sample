@@ -4,7 +4,7 @@
 
 ## Runs build and generates pack
 build:
-	sbt compile test pack
+	sbt clean compile test pack
 
 ## Runs postgress container
 run-postgres:
